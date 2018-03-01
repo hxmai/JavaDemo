@@ -2,24 +2,28 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Set;
 
-public class Main {
+public class ChatServer {
     private Selector selector;
     private ByteBuffer readBuffer = ByteBuffer.allocate(2048);
     private ByteBuffer writeBuffer = ByteBuffer.allocate(2048);
     private String str;
-    public void start()throws IOException{
-        ServerSocketChannel serverSocketChannel1 = ServerSocketChannel.open();
-        serverSocketChannel1.configureBlocking(false);
-        serverSocketChannel1.bind(new InetSocketAddress("localhost",8001));
+    private Set<SocketChannel> clientSet = new HashSet<>();
+
+    public void start() throws IOException, InterruptedException {
         selector = Selector.open();
-        serverSocketChannel1.register(selector, SelectionKey.OP_ACCEPT);
+        ServerSocketChannel serverSocketChannel = ServerSocketChannel.open();
+        serverSocketChannel.configureBlocking(false);
+        serverSocketChannel.bind(new InetSocketAddress("localhost",8001));
+        //服务器通道只注册监听连接的事件
+        serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
         while (!Thread.currentThread().isInterrupted()) {
             selector.select();
-            Set<SelectionKey> set = selector.selectedKeys();
-            Iterator<SelectionKey> iterator = set.iterator();
+            Set<SelectionKey> keysSet = selector.selectedKeys();
+            Iterator<SelectionKey> iterator = keysSet.iterator();
             while (iterator.hasNext()) {
                 SelectionKey key = iterator.next();
                 if (!key.isValid()) {
@@ -35,12 +39,19 @@ public class Main {
             }
         }
     }
-    private void accept(SelectionKey key) throws IOException {
+
+    private void accept(SelectionKey key) throws IOException, InterruptedException {
         ServerSocketChannel ssc = (ServerSocketChannel) key.channel();
         SocketChannel clientChannel = ssc.accept();
         clientChannel.configureBlocking(false);
+        writeBuffer.clear();
+        writeBuffer.put("welcome!".getBytes());
+        writeBuffer.flip();
+        clientChannel.write(writeBuffer);
+        broadCast("a new client connected "+clientChannel.getRemoteAddress());
+        //注册读客户端内容的事件
         clientChannel.register(selector, SelectionKey.OP_READ);
-        System.out.println("a new client connected "+clientChannel.getRemoteAddress());
+        clientSet.add(clientChannel);
     }
 
     private void write(SelectionKey key) throws IOException, ClosedChannelException {
@@ -56,31 +67,35 @@ public class Main {
 
     private void read(SelectionKey key) throws IOException {
         SocketChannel socketChannel = (SocketChannel) key.channel();
-
-        // Clear out our read buffer so it's ready for new data
         this.readBuffer.clear();
-//        readBuffer.flip();
-        // Attempt to read off the channel
         int numRead;
         try {
             numRead = socketChannel.read(this.readBuffer);
         } catch (IOException e) {
-            // The remote forcibly closed the connection, cancel
-            // the selection key and close the channel.
             key.cancel();
             socketChannel.close();
-
             return;
         }
-
         str = new String(readBuffer.array(), 0, numRead);
-        System.out.println(str);
-        socketChannel.register(selector, SelectionKey.OP_WRITE);
+        broadCast(socketChannel.getRemoteAddress()+":"+str);
     }
 
+    private void broadCast(String msg){
+        //广播
+        writeBuffer.clear();
+        writeBuffer.put(msg.getBytes());
+        writeBuffer.flip();
+        clientSet.forEach(client->{
+            try {
+                client.write(writeBuffer);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        });
+    }
 
     public static void main(String[] args) throws Exception {
-        new Main().start();
+        new ChatServer().start();
     }
 
 }
